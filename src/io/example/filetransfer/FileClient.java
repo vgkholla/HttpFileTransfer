@@ -32,11 +32,17 @@ import java.util.concurrent.TimeUnit;
 
 
 public class FileClient implements Runnable {
-  private static final String path_prefix = "/tmp/client/x";
+  private static final String dir = "/tmp/client/";
+  private static final String file_prefix = "x";
   private String path;
 
   public static void main(String[] args)
       throws Exception {
+
+    File f = new File(dir);
+    if (!f.exists()) {
+      f.mkdir();
+    }
 
     BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
     System.out.println("Enter number of threads: ");
@@ -45,7 +51,7 @@ public class FileClient implements Runnable {
     ExecutorService executor = Executors.newFixedThreadPool(num_threads);
 
     for (int i = 0; i < num_threads; i++) {
-      executor.execute(new FileClient(path_prefix + Integer.toString(i)));
+      executor.execute(new FileClient(dir + file_prefix + Integer.toString(i)));
     }
 
     executor.shutdown();
@@ -135,8 +141,16 @@ class HttpFileClientHandler extends SimpleChannelInboundHandler<Object> {
         return;
       }
 
-      content.readBytes(fop, content.readableBytes());
-      fop.flush();
+      int len=-2;
+
+      try {
+          len = content.readableBytes();
+          content.readBytes(fop, content.readableBytes());
+          fop.flush();
+      } catch (Exception e) {
+        e.printStackTrace(System.out);
+        System.out.println("len is " + Integer.toString(len));
+      }
     }
 
     if (in instanceof LastHttpContent) {

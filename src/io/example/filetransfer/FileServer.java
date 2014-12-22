@@ -1,6 +1,7 @@
 package io.example.filetransfer;
 
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -15,9 +16,10 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.DefaultHttpContent;
 import io.netty.handler.codec.http.DefaultHttpResponse;
 import io.netty.handler.codec.http.FullHttpResponse;
-import io.netty.handler.codec.http.HttpChunkedInput;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObject;
@@ -26,20 +28,83 @@ import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.logging.LoggingHandler;
-import io.netty.handler.stream.ChunkedFile;
+import io.netty.handler.stream.ChunkedInput;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.CharsetUtil;
 import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.RandomAccessFile;
-import javax.activation.MimetypesFileTypeMap;
+import java.io.FileInputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 
-public class FileServer {
+class Fetcher implements Runnable {
+  public static final int BUFSIZE = 1024*1024;
+  private File file;
+  private ByteBuf buf;
+  private ChannelHandlerContext ctx;
+  private AtomicBoolean done;
+  private AtomicBoolean suspended;
+  private byte[] b;
+  public Fetcher(ChannelHandlerContext ctx, File file, ByteBuf buf) {
+    this.file = file;
+    this.done = new AtomicBoolean(false);
+    this.suspended = new AtomicBoolean(false);
+    this.buf = buf;
+    this.ctx = ctx;
+    this.b = new byte[BUFSIZE];
+  }
+
+  public void run() {
+    try {
+        long bytes = 0;
+        FileInputStream fip = new FileInputStream(file);
+        while (true) {
+          if (!buf.isWritable(BUFSIZE)) {
+            Thread.sleep(10); //so we don't hog the cpu
+            continue;
+          }
+          int sz = fip.read(b);
+          if (sz == -1)
+            break;
+          buf.writeBytes(b, 0, sz);
+          bytes += sz;
+          System.out.println("Wrote " + bytes + " bytes");
+          if (suspended.get()) {
+              suspended.set(false);
+              ChunkedWriteHandler chunker = (ChunkedWriteHandler) ctx.pipeline().get("chunker");
+              System.out.println("Resuming transfer");
+              chunker.resumeTransfer();
+          }
+        }
+        System.out.println("Done reading");
+        done.set(true);
+    } catch (Exception e) {
+      e.printStackTrace(System.out);
+      System.out.println("Caught Exception");
+    }
+  }
+
+  public void suspend() {
+    suspended.set(true);
+  }
+
+  public boolean isDone() {
+    return done.get();
+  }
+
+  public ByteBuf getBuf() {
+    return buf;
+  }
+}
+
+public class FileServer implements Runnable {
   private int port;
   private static final String sourceDir = "/tmp/server/";
+  private ExecutorService executor;
 
   public static String getSourceDir() {
     return sourceDir;
@@ -47,21 +112,25 @@ public class FileServer {
 
   public static void main(String[] args)
       throws Exception {
-    new FileServer(8088).run();
+    ExecutorService executor = Executors.newFixedThreadPool(10);
+    executor.execute(new FileServer(8088, executor));
+    //executor.shutdown();
+    //executor.awaitTermination(1, TimeUnit.DAYS);
   }
 
-  public FileServer(int port) {
+  public FileServer(int port, ExecutorService executor) {
     this.port = port;
-    File f = new File(sourceDir);
-    if (!f.exists()) {
-      f.mkdir();
+    this.executor = executor;
+    File dir = new File(sourceDir);
+    if (!dir.exists()) {
+      dir.mkdir();
     }
   }
 
-  public void run()
-      throws Exception {
-    EventLoopGroup bossGroup = new NioEventLoopGroup();
-    EventLoopGroup workerGroup = new NioEventLoopGroup();
+  public void run() {
+
+    EventLoopGroup bossGroup = new NioEventLoopGroup(1);
+    EventLoopGroup workerGroup = new NioEventLoopGroup(1);
 
     try {
        ServerBootstrap b = new ServerBootstrap();
@@ -70,16 +139,17 @@ public class FileServer {
         @Override
         public void initChannel(SocketChannel ch)
             throws Exception {
-          ch.pipeline().addLast(new HttpServerCodec())
-                       .addLast(new ChunkedWriteHandler())
-                       .addLast(new MyFileServerHandler());
+          ch.pipeline().addLast("codec", new HttpServerCodec())
+                       .addLast("chunker", new ChunkedWriteHandler())
+                       .addLast("custom", new MyFileServerHandler(executor));
         }
       });
       ChannelFuture f = b.bind(port).sync();
       System.out.println("Open your web browser and navigate to " +
           "http://127.0.0.1:" + port + '/');
       f.channel().closeFuture().sync();
-    } finally {
+    } catch (Exception e) {
+    }finally {
       workerGroup.shutdownGracefully();
       bossGroup.shutdownGracefully();
     }
@@ -87,10 +157,16 @@ public class FileServer {
 }
 
 class MyFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
+  private ExecutorService executor;
+
+  public MyFileServerHandler(ExecutorService executor) {
+    this.executor = executor;
+  }
 
   @Override
   public void channelRead0(ChannelHandlerContext ctx, HttpObject msg)
       throws Exception {
+    ctx.getClass();
     if (msg instanceof HttpRequest) {
       HttpRequest request = (HttpRequest) msg;
       if (!request.getDecoderResult().isSuccess()) {
@@ -122,18 +198,13 @@ class MyFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
         return;
       }
 
-      RandomAccessFile raf;
-      try {
-        raf = new RandomAccessFile(file, "r");
-      } catch (FileNotFoundException ignore) {
-        sendError(ctx, HttpResponseStatus.NOT_FOUND);
-        return;
-      }
-      long fileLength = raf.length();
+      Fetcher f = new Fetcher(ctx, file, Unpooled.buffer(Fetcher.BUFSIZE));
+
+      executor.execute(f);
 
       HttpResponse response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-      HttpHeaders.setContentLength(response, fileLength);
-      setContentTypeHeader(response, file);
+      //HttpHeaders.setContentLength(response, fileLength);
+      setContentTypeHeader(response);
       response.headers().set(HttpHeaders.Names.TRANSFER_ENCODING, HttpHeaders.Values.CHUNKED);
       if (HttpHeaders.isKeepAlive(request)) {
         response.headers().set(HttpHeaders.Names.CONNECTION, HttpHeaders.Values.KEEP_ALIVE);
@@ -145,8 +216,8 @@ class MyFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
       // Write the content.
       ChannelFuture sendFileFuture;
       ChannelFuture lastContentFuture;
-      sendFileFuture = ctx.writeAndFlush(new HttpChunkedInput(new ChunkedFile(raf, 0, fileLength, 8192)),
-          ctx.newProgressivePromise());
+      //sendFileFuture = ctx.writeAndFlush(new HttpChunkedInput(new ChunkedFile(raf, 0, fileLength, 8192)),
+      sendFileFuture = ctx.writeAndFlush(new MyHttpChunkedInput(f), ctx.newProgressivePromise());
       // HttpChunkedInput will write the end marker (LastHttpContent) for us.
       lastContentFuture = sendFileFuture;
 
@@ -159,6 +230,7 @@ class MyFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
             System.out.println(future.channel() + " Transfer progress: " + progress + " / " + total);
           }
         }
+
 
         @Override
         public void operationComplete(ChannelProgressiveFuture future) {
@@ -183,8 +255,55 @@ class MyFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
     ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
   }
 
-  private static void setContentTypeHeader(HttpResponse response, File file) {
+  private static void setContentTypeHeader(HttpResponse response) {
     response.headers()
         .set(HttpHeaders.Names.CONTENT_TYPE, "application/octet-stream");
   }
 }
+
+class MyHttpChunkedInput implements ChunkedInput<HttpContent> {
+  Fetcher fetcher;
+  private final LastHttpContent lastHttpContent;
+  private boolean sentLastChunk;
+  MyHttpChunkedInput(Fetcher f) {
+    this.fetcher = f;
+    this.lastHttpContent = LastHttpContent.EMPTY_LAST_CONTENT;
+  }
+  @Override
+  public void close() throws Exception {
+  }
+
+  @Override
+  public HttpContent readChunk(ChannelHandlerContext ctx) throws Exception {
+    if (fetcher.isDone()) {
+      if (sentLastChunk) {
+        System.out.println("Returned eof");
+        return null;
+      } else {
+        sentLastChunk = true;
+        System.out.println("Returned lastHttpContent");
+        return lastHttpContent;
+      }
+    }
+    ByteBuf buf = fetcher.getBuf();
+    buf.discardReadBytes();
+    if (buf.readableBytes() > 0) {
+      ByteBuf slice = buf.readBytes(buf.readableBytes());
+      //ByteBuf slice = buf.retain().readSlice(buf.readableBytes());
+      System.out.println("Returning slice");
+      return new DefaultHttpContent(slice);
+    } else {
+      System.out.println("Returning null");
+      fetcher.suspend();
+      return null;
+    }
+  }
+
+  @Override
+  public boolean isEndOfInput() throws Exception {
+    boolean ret = fetcher.isDone() && sentLastChunk;
+    return ret;
+  }
+
+}
+
