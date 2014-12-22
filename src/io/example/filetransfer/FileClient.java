@@ -83,7 +83,7 @@ public class FileClient implements Runnable {
             throws Exception {
           ch.pipeline().addLast(new HttpClientCodec())
                        .addLast(new ChunkedWriteHandler())
-                       .addLast(new HttpFileClientHandler(file_path));
+                       .addLast(new MyHttpFileClientHandler(file_path));
         }
       });
 
@@ -98,11 +98,11 @@ public class FileClient implements Runnable {
   }
 }
 
-class HttpFileClientHandler extends SimpleChannelInboundHandler<Object> {
+class MyHttpFileClientHandler extends SimpleChannelInboundHandler<Object> {
   private FileOutputStream fop;
   private String target_path;
 
-  HttpFileClientHandler(String path) {
+  MyHttpFileClientHandler(String path) {
     target_path = path;
   }
 

@@ -141,7 +141,7 @@ public class FileServer implements Runnable {
             throws Exception {
           ch.pipeline().addLast("codec", new HttpServerCodec())
                        .addLast("chunker", new ChunkedWriteHandler())
-                       .addLast("custom", new MyFileServerHandler(executor));
+                       .addLast("custom", new MyHttpFileServerHandler(executor));
         }
       });
       ChannelFuture f = b.bind(port).sync();
@@ -156,10 +156,10 @@ public class FileServer implements Runnable {
   }
 }
 
-class MyFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
+class MyHttpFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
   private ExecutorService executor;
 
-  public MyFileServerHandler(ExecutorService executor) {
+  public MyHttpFileServerHandler(ExecutorService executor) {
     this.executor = executor;
   }
 
