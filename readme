@@ -10,7 +10,7 @@ Server:
   - creates a new Fetcher thread (outside of netty) to "fetch" the file requested,
   - invokes the outbound ChunkedWriteHandler's write with a MyHttpChunkedInput object for the requested fetcher.
 - The ChunkedWriteHandler calls the readChunk() method on MyHttpChunkedInput to transfer the file's data in chunks to the client.
-- MyHttpChunkedInput's readChunk() will return null if either eof is reached, or if data is not ready to be sent. In the latter case, ChunkedWriteHandler gets suspended. When the data is ready, the fetcher will call resumeTransfer on the ChunkedWriteHandler.
+- MyHttpChunkedInput's readChunk() will return null if either eof is reached, or if data is not ready to be sent. In the latter case, ChunkedWriteHandler gets suspended. Note that this does not block the EventLoop thread, which can go ahead and serve requests for other channels. When the data is ready, the fetcher calls resumeTransfer on the ChunkedWriteHandler.
 
 
 Client:
