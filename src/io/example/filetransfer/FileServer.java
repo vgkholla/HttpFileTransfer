@@ -203,7 +203,7 @@ class MyHttpFileServerHandler extends SimpleChannelInboundHandler<HttpObject> {
       executor.execute(f);
 
       HttpResponse response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
-      //HttpHeaders.setContentLength(response, fileLength);
+      //HttpHeaders.setContentLength(response, file.length());
       setContentTypeHeader(response);
       response.headers().set(HttpHeaders.Names.TRANSFER_ENCODING, HttpHeaders.Values.CHUNKED);
       if (HttpHeaders.isKeepAlive(request)) {

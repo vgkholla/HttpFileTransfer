@@ -1,0 +1,21 @@
+- Simple file transfer over http using netty 4.0.24 library
+- Each thread from the client creates a separate channel to the server and does the data transfer in parallel with the other channels.
+- Only one netty EventLoop thread is created serving all the channels.
+- Producer and consumer work asynchronously, so produce rate can be slower than consume rate and vice versa.
+
+Server:
+- The Server's worker is initialized with NioEventLoopGroup with just 1 thread to serve all requests.
+- MyHttpFileServerHandler is an inbound handler whose channelRead method
+  - interprets the http request from the client,
+  - creates a new Fetcher thread (outside of netty) to "fetch" the file requested,
+  - invokes the outbound ChunkedWriteHandler's write with a MyHttpChunkedInput object for the requested fetcher.
+- The ChunkedWriteHandler calls the readChunk() method on MyHttpChunkedInput to transfer the file's data in chunks to the client.
+- MyHttpChunkedInput's readChunk() will return null if either eof is reached, or if data is not ready to be sent. In the latter case, ChunkedWriteHandler gets suspended. When the data is ready, the fetcher will call resumeTransfer on the ChunkedWriteHandler.
+
+
+Client:
+- Takes an input which is the number of threads to create.
+- Each thread
+  - Makes a request for the file /tmp/server/i
+  - Reads it in chunks and writes to /tmp/client/x<threadid>
+
