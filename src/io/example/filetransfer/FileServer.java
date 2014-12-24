@@ -60,6 +60,7 @@ class Fetcher implements Runnable {
 
   public void run() {
     try {
+        ChunkedWriteHandler chunker = (ChunkedWriteHandler) ctx.pipeline().get("chunker");
         long bytes = 0;
         FileInputStream fip = new FileInputStream(file);
         while (true) {
@@ -75,13 +76,15 @@ class Fetcher implements Runnable {
           System.out.println("Wrote " + bytes + " bytes");
           if (suspended.get()) {
               suspended.set(false);
-              ChunkedWriteHandler chunker = (ChunkedWriteHandler) ctx.pipeline().get("chunker");
               System.out.println("Resuming transfer");
               chunker.resumeTransfer();
           }
         }
         System.out.println("Done reading");
         done.set(true);
+        if (suspended.get()) {
+          chunker.resumeTransfer();
+        }
     } catch (Exception e) {
       e.printStackTrace(System.out);
       System.out.println("Caught Exception");
