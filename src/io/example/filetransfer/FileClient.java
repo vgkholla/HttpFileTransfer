@@ -35,6 +35,7 @@ public class FileClient implements Runnable {
   private static final String dir = "/tmp/client/";
   private static final String file_prefix = "x";
   private String path;
+  private int transferCount;
 
   public static void main(String[] args)
       throws Exception {
@@ -47,11 +48,13 @@ public class FileClient implements Runnable {
     BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
     System.out.println("Enter number of threads: ");
     int num_threads = Integer.parseInt(in.readLine());
+    System.out.println("Enter number of transfers per thread: ");
+    int transferCount = Integer.parseInt(in.readLine());
 
     ExecutorService executor = Executors.newFixedThreadPool(num_threads);
 
     for (int i = 0; i < num_threads; i++) {
-      executor.execute(new FileClient(dir + file_prefix + Integer.toString(i)));
+      executor.execute(new FileClient(dir + file_prefix + Integer.toString(i), transferCount));
     }
 
     executor.shutdown();
@@ -59,8 +62,9 @@ public class FileClient implements Runnable {
     System.out.println("Done");
   }
 
-  public FileClient(String path) {
+  public FileClient(String path, int transferCount) {
     this.path = path;
+    this.transferCount = transferCount;
   }
 
   public void run() {
@@ -83,7 +87,7 @@ public class FileClient implements Runnable {
             throws Exception {
           ch.pipeline().addLast(new HttpClientCodec())
                        .addLast(new ChunkedWriteHandler())
-                       .addLast(new MyHttpFileClientHandler(file_path));
+                       .addLast(new MyHttpFileClientHandler(file_path, transferCount));
         }
       });
 
@@ -101,16 +105,18 @@ public class FileClient implements Runnable {
 class MyHttpFileClientHandler extends SimpleChannelInboundHandler<Object> {
   private FileOutputStream fop;
   private String target_path;
+  private int transferCount;
 
-  MyHttpFileClientHandler(String path) {
+  MyHttpFileClientHandler(String path, int transferCount) {
     target_path = path;
+    this.transferCount = transferCount;
   }
 
   @Override
   public void channelActive(ChannelHandlerContext ctx)
       throws Exception {
     FullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "i");
-    HttpHeaders.setKeepAlive(request, false);
+    HttpHeaders.setKeepAlive(request, true);
     ctx.writeAndFlush(request);
   }
 
@@ -128,7 +134,7 @@ class MyHttpFileClientHandler extends SimpleChannelInboundHandler<Object> {
         return;
       }
 
-      File file = new File(target_path);
+      File file = new File(target_path + transferCount);
       fop = new FileOutputStream(file);
     }
 
@@ -156,6 +162,13 @@ class MyHttpFileClientHandler extends SimpleChannelInboundHandler<Object> {
     if (in instanceof LastHttpContent) {
       fop.flush();
       fop.close();
+
+      if (--transferCount > 0) {
+          System.out.println(transferCount + " transfers left, starting next transfer.");
+          FullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "i");
+          HttpHeaders.setKeepAlive(request, transferCount > 1 ? true : false);
+          ctx.writeAndFlush(request);
+      }
     }
   }
 

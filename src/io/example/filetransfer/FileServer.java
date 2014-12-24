@@ -307,6 +307,5 @@ class MyHttpChunkedInput implements ChunkedInput<HttpContent> {
     boolean ret = fetcher.isDone() && sentLastChunk;
     return ret;
   }
-
 }
 
