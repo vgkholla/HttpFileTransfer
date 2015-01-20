@@ -19,3 +19,16 @@ Client:
   - Makes a request for the file /tmp/server/i
   - Reads it in chunks and writes to /tmp/client/x<threadid>
 
+
+====
+
+
+How it works:
+-------------
+- We create an NIO event loop group for the worker with a single thread.
+- The NIO event loop class has a selector to which channels are registered, and the selector does multiplexing of these in the vent loop.
+- The NIO event loop's run method runs in a loop and the selector selects keys (channels), and processes the selected keys (which results in events being fired on the channel)
+- In our example, when readChunk() returns NULL and it is not eof, the doFlush() method simply exits, so the task finishes, but nothing gets closed.
+- In our example, when we call resumeTransfer on the ChunkedWriteHandler, it creates a new Runnable task and adds it to the executor for the context (SingleThreadEventExecutor), so
+  that when the selector processes the keys, this task gets run. This runnable task simply calls doFlush() which basically, in a loop, calls readChunk() again and again. If it
+  encounters null without eof, again, this task will finish and when the resumeTransfer gets called again, it creates another Runnable task for the executor to execute.
